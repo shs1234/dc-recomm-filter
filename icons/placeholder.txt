@@ -1,0 +1,2 @@
+Add PNG icons named icon16.png, icon48.png, icon128.png here.
+You can use any small PNGs. Place them with the specified names so the manifest finds them.

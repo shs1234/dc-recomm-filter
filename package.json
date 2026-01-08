@@ -1,0 +1,12 @@
+{
+  "name": "dc-recomm-filter",
+  "version": "0.1.0",
+  "description": "DCInside 추천수 필터 - tests",
+  "devDependencies": {
+    "jsdom": "^21.1.0"
+  },
+  "scripts": {
+    "test": "node tests/test_parser.js",
+    "package": "sh scripts/package.sh"
+  }
+}
