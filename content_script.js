@@ -1,5 +1,5 @@
 (() => {
-  const DEFAULTS = { enabled: true, threshold: 10 };
+  const DEFAULTS = { enabled: true, threshold: 10, hotkeysEnabled: true };
   let settings = { ...DEFAULTS };
   let debounceTimer = null;
 
@@ -137,11 +137,65 @@
     observer.observe(document.body, { childList: true, subtree: true });
   }
 
+  // ---- Page navigation hotkeys ----
+  let _keyListener = null;
+
+  function isTyping() {
+    const el = document.activeElement;
+    if (!el) return false;
+    const tag = (el.tagName || '').toUpperCase();
+    return tag === 'INPUT' || tag === 'TEXTAREA' || el.isContentEditable;
+  }
+
+  function currentPageNumber() {
+    try {
+      const u = new URL(window.location.href);
+      return parseInt(u.searchParams.get('page') || '1', 10);
+    } catch (e) {
+      return 1;
+    }
+  }
+
+  function gotoPage(n) {
+    if (!Number.isInteger(n) || n < 1) return;
+    try {
+      const u = new URL(window.location.href);
+      u.searchParams.set('page', String(n));
+      window.location.href = u.toString();
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  function addKeyNav() {
+    if (_keyListener) return;
+    _keyListener = (e) => {
+      if (isTyping()) return;
+      if (e.defaultPrevented) return;
+      // Use '.' / ',' for next / previous page
+      if (e.key === '.' && !e.ctrlKey && !e.altKey && !e.metaKey) {
+        const next = currentPageNumber() + 1;
+        gotoPage(next);
+      } else if (e.key === ',' && !e.ctrlKey && !e.altKey && !e.metaKey) {
+        const prev = currentPageNumber() - 1;
+        if (prev >= 1) gotoPage(prev);
+      }
+    };
+    document.addEventListener('keydown', _keyListener);
+  }
+
+  function removeKeyNav() {
+    if (!_keyListener) return;
+    document.removeEventListener('keydown', _keyListener);
+    _keyListener = null;
+  }
+
   // Apply initial settings and run
   chrome.storage.sync.get(DEFAULTS, (items) => {
     settings = { ...DEFAULTS, ...items };
     runFilter();
     initObserver();
+    if (settings.hotkeysEnabled) addKeyNav();
   });
 
   // Listen for storage changes
@@ -149,6 +203,11 @@
     let changed = false;
     if (changes.enabled) { settings.enabled = changes.enabled.newValue; changed = true; }
     if (changes.threshold) { settings.threshold = changes.threshold.newValue; changed = true; }
+    if (changes.hotkeysEnabled) {
+      settings.hotkeysEnabled = changes.hotkeysEnabled.newValue;
+      changed = true;
+      if (settings.hotkeysEnabled) addKeyNav(); else removeKeyNav();
+    }
     if (changed) runFilter();
   });
 
