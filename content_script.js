@@ -282,30 +282,86 @@
     } catch (e) { return null; }
   }
 
-  // Q/E: 항상 현재 목록 페이지를 경유해 최신 필터 결과 기준으로 이동
-  function navigateViaList(direction) {
+  // fetch로 목록 페이지를 파싱해 필터 통과 글 목록 반환
+  async function fetchFilteredPosts(listUrl, galleryId) {
+    const resp = await fetch(listUrl);
+    const html = await resp.text();
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+
+    const anchors = Array.from(doc.querySelectorAll(
+      'a[href*="/board/view"], a[href*="/board/read"], a[href*="/gallery/read"]'
+    ));
+    const processed = new Set();
+    const seenNos = new Set();
+    const posts = [];
+
+    for (const a of anchors) {
+      const post = getPostElementFromAnchor(a);
+      if (!post || processed.has(post)) continue;
+      processed.add(post);
+      try {
+        const u = new URL(a.href, listUrl);
+        if (u.searchParams.get('id') !== galleryId) continue;
+        const no = parseInt(u.searchParams.get('no'), 10);
+        if (!Number.isInteger(no) || seenNos.has(no)) continue;
+        const recom = findRecommendInNode(post);
+        if (recom !== null && recom < settings.threshold) continue;
+        seenNos.add(no);
+        posts.push({ no, href: a.href });
+      } catch (e) { /* ignore */ }
+    }
+    return posts;
+  }
+
+  // Q/E: fetch로 목록을 백그라운드에서 갱신한 뒤 바로 글로 이동
+  async function navigateViaList(direction) {
     const galleryId = getGalleryId();
     const currentNo = getCurrentPostNo();
     if (!galleryId || !currentNo) return;
-    const listUrl = getListPageUrl(0);
-    if (!listUrl) return;
+
     try {
-      sessionStorage.setItem(GOTO_KEY, JSON.stringify({
-        galleryId,
-        target: direction === +1 ? 'next' : 'prev',
-        currentNo,
-      }));
-    } catch (e) { /* ignore */ }
-    window.location.href = listUrl;
+      const listUrl = getListPageUrl(0);
+      if (!listUrl) return;
+
+      const posts = await fetchFilteredPosts(listUrl, galleryId);
+      try {
+        sessionStorage.setItem(FILTERED_POSTS_KEY + galleryId, JSON.stringify(posts));
+      } catch (e) { /* ignore */ }
+
+      const idx = posts.findIndex(p => p.no === currentNo);
+      if (idx !== -1 && posts[idx + direction]) {
+        // 같은 페이지 내 인접 글
+        window.location.href = posts[idx + direction].href;
+      } else {
+        // 경계: 인접 목록 페이지 fetch 후 first/last 글로 이동
+        const adjUrl = getListPageUrl(direction);
+        if (!adjUrl) return;
+        const adjPosts = await fetchFilteredPosts(adjUrl, galleryId);
+        if (!adjPosts.length) return;
+        const target = direction === +1 ? adjPosts[0] : adjPosts[adjPosts.length - 1];
+        window.location.href = target.href;
+      }
+    } catch (e) {
+      // fetch 실패 시 목록 페이지 경유 방식으로 폴백
+      const listUrl = getListPageUrl(0);
+      if (!listUrl) return;
+      try {
+        sessionStorage.setItem(GOTO_KEY, JSON.stringify({
+          galleryId, currentNo,
+          target: direction === +1 ? 'next' : 'prev',
+        }));
+      } catch (e2) { /* ignore */ }
+      window.location.href = listUrl;
+    }
   }
 
-  // 목록 페이지 도착 후 플래그를 확인해 자동으로 해당 글로 이동
+  // 목록 페이지 도착 후 플래그를 확인해 자동으로 해당 글로 이동 (폴백용)
   function checkAndExecuteGoto() {
     try {
       const raw = sessionStorage.getItem(GOTO_KEY);
       if (!raw) return;
       const { galleryId, target, currentNo } = JSON.parse(raw);
-      sessionStorage.removeItem(GOTO_KEY); // 무한 루프 방지
+      sessionStorage.removeItem(GOTO_KEY);
       if (galleryId !== getGalleryId()) return;
 
       const stored = sessionStorage.getItem(FILTERED_POSTS_KEY + galleryId);
@@ -318,21 +374,17 @@
       } else if (target === 'last') {
         window.location.href = posts[posts.length - 1].href;
       } else {
-        // next / prev: currentNo 기준으로 인접 글 탐색
-        const direction = target === 'next' ? +1 : -1;
+        const dir = target === 'next' ? +1 : -1;
         const idx = posts.findIndex(p => p.no === currentNo);
-        if (idx !== -1 && posts[idx + direction]) {
-          // 같은 페이지 내 인접 글
-          window.location.href = posts[idx + direction].href;
+        if (idx !== -1 && posts[idx + dir]) {
+          window.location.href = posts[idx + dir].href;
         } else {
-          // 현재 페이지 경계 → 인접 목록 페이지로 이동
           const u = new URL(window.location.href);
-          const nextPage = parseInt(u.searchParams.get('page') || '1', 10) + direction;
+          const nextPage = parseInt(u.searchParams.get('page') || '1', 10) + dir;
           if (nextPage >= 1) {
             try {
               sessionStorage.setItem(GOTO_KEY, JSON.stringify({
-                galleryId,
-                target: direction === +1 ? 'first' : 'last',
+                galleryId, target: dir === +1 ? 'first' : 'last',
               }));
             } catch (e) { /* ignore */ }
             u.searchParams.set('page', String(nextPage));
