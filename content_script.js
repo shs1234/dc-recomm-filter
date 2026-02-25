@@ -170,18 +170,33 @@
     }
   }
 
+  function getWritePageUrl() {
+    try {
+      const u = new URL(window.location.href);
+      const writePath = u.pathname.replace(/\/(lists|view|read)\/?$/, '/write/');
+      if (writePath === u.pathname) return null;
+      const writeUrl = new URL(u.origin + writePath);
+      writeUrl.searchParams.set('id', u.searchParams.get('id') || '');
+      return writeUrl.toString();
+    } catch (e) { return null; }
+  }
+
   function addKeyNav() {
     if (_keyListener) return;
     _keyListener = (e) => {
       if (isTyping()) return;
-      if (e.defaultPrevented) return;
-      // Use '.' / ',' for next / previous page
-      if (e.key === '.' && !e.ctrlKey && !e.altKey && !e.metaKey) {
+      if (e.defaultPrevented || e.ctrlKey || e.altKey || e.metaKey) return;
+      if (e.key === '.') {
         const next = currentPageNumber() + 1;
         gotoPage(next);
-      } else if (e.key === ',' && !e.ctrlKey && !e.altKey && !e.metaKey) {
+      } else if (e.key === ',') {
         const prev = currentPageNumber() - 1;
         if (prev >= 1) gotoPage(prev);
+      } else if (e.key === 'r' || e.key === 'R') {
+        window.location.reload();
+      } else if (e.key === 'w' || e.key === 'W') {
+        const url = getWritePageUrl();
+        if (url) window.location.href = url;
       }
     };
     document.addEventListener('keydown', _keyListener);
@@ -232,64 +247,24 @@
       if (post.dataset.dcFilterHidden === 'true') continue;
       try {
         const u = new URL(a.href, window.location.href);
+        if (u.searchParams.get('id') !== galleryId) continue; // 다른 갤러리 제외
         const no = parseInt(u.searchParams.get('no'), 10);
         if (Number.isInteger(no)) posts.push({ no, href: a.href });
       } catch (e) { /* ignore */ }
     }
 
+    // no 기준 중복 제거 (같은 행에 앵커가 여러 개인 경우)
+    const seen = new Set();
+    const uniquePosts = posts.filter(p => seen.has(p.no) ? false : seen.add(p.no));
+
     try {
-      sessionStorage.setItem(FILTERED_POSTS_KEY + galleryId, JSON.stringify(posts));
+      sessionStorage.setItem(FILTERED_POSTS_KEY + galleryId, JSON.stringify(uniquePosts));
     } catch (e) { /* ignore */ }
 
     checkAndExecuteGoto();
   }
 
-  function getAdjacentPostHref(direction) {
-    // direction: -1 = Q (위로/newer), +1 = E (아래로/older)
-    const galleryId = getGalleryId();
-    const currentNo = getCurrentPostNo();
-    if (!galleryId || !currentNo) return null;
-
-    try {
-      const stored = sessionStorage.getItem(FILTERED_POSTS_KEY + galleryId);
-      if (stored) {
-        const posts = JSON.parse(stored);
-        const idx = posts.findIndex(p => p.no === currentNo);
-        if (idx !== -1) {
-          const target = posts[idx + direction];
-          return target ? target.href : null;
-        }
-      }
-    } catch (e) { /* ignore */ }
-
-    // 저장된 목록이 없을 때 폴백: 글 번호 ±1
-    try {
-      const u = new URL(window.location.href);
-      // DCInside는 기본 최신순 정렬 → 위(Q)=no+1, 아래(E)=no-1
-      const nextNo = currentNo - direction;
-      if (nextNo < 1) return null;
-      u.searchParams.set('no', String(nextNo));
-      return u.toString();
-    } catch (e) { return null; }
-  }
-
-  // 저장된 필터 목록 기준으로 현재 글이 경계에 있는지 확인
-  function atStoredBoundary(direction) {
-    const galleryId = getGalleryId();
-    const currentNo = getCurrentPostNo();
-    if (!galleryId || !currentNo) return false;
-    try {
-      const stored = sessionStorage.getItem(FILTERED_POSTS_KEY + galleryId);
-      if (!stored) return false;
-      const posts = JSON.parse(stored);
-      const idx = posts.findIndex(p => p.no === currentNo);
-      if (idx === -1) return false;
-      const nextIdx = idx + direction;
-      return nextIdx < 0 || nextIdx >= posts.length;
-    } catch (e) { return false; }
-  }
-
-  // 목록 페이지 URL 생성 (view URL 기준으로 page 조정)
+  // 목록 페이지 URL 생성 (view/list URL 기준으로 page 조정)
   function getListPageUrl(pageOffset) {
     try {
       const u = new URL(window.location.href);
@@ -307,14 +282,19 @@
     } catch (e) { return null; }
   }
 
-  // 인접 페이지로 이동하며 자동 열 글 위치 플래그 저장
-  function navigateToAdjacentPage(direction) {
-    // E(+1): 다음 페이지 첫 글 / Q(-1): 이전 페이지 마지막 글
-    const listUrl = getListPageUrl(direction);
+  // Q/E: 항상 현재 목록 페이지를 경유해 최신 필터 결과 기준으로 이동
+  function navigateViaList(direction) {
+    const galleryId = getGalleryId();
+    const currentNo = getCurrentPostNo();
+    if (!galleryId || !currentNo) return;
+    const listUrl = getListPageUrl(0);
     if (!listUrl) return;
-    const target = direction === +1 ? 'first' : 'last';
     try {
-      sessionStorage.setItem(GOTO_KEY, JSON.stringify({ galleryId: getGalleryId(), target }));
+      sessionStorage.setItem(GOTO_KEY, JSON.stringify({
+        galleryId,
+        target: direction === +1 ? 'next' : 'prev',
+        currentNo,
+      }));
     } catch (e) { /* ignore */ }
     window.location.href = listUrl;
   }
@@ -324,7 +304,7 @@
     try {
       const raw = sessionStorage.getItem(GOTO_KEY);
       if (!raw) return;
-      const { galleryId, target } = JSON.parse(raw);
+      const { galleryId, target, currentNo } = JSON.parse(raw);
       sessionStorage.removeItem(GOTO_KEY); // 무한 루프 방지
       if (galleryId !== getGalleryId()) return;
 
@@ -333,8 +313,33 @@
       const posts = JSON.parse(stored);
       if (!posts.length) return;
 
-      const post = target === 'first' ? posts[0] : posts[posts.length - 1];
-      if (post) window.location.href = post.href;
+      if (target === 'first') {
+        window.location.href = posts[0].href;
+      } else if (target === 'last') {
+        window.location.href = posts[posts.length - 1].href;
+      } else {
+        // next / prev: currentNo 기준으로 인접 글 탐색
+        const direction = target === 'next' ? +1 : -1;
+        const idx = posts.findIndex(p => p.no === currentNo);
+        if (idx !== -1 && posts[idx + direction]) {
+          // 같은 페이지 내 인접 글
+          window.location.href = posts[idx + direction].href;
+        } else {
+          // 현재 페이지 경계 → 인접 목록 페이지로 이동
+          const u = new URL(window.location.href);
+          const nextPage = parseInt(u.searchParams.get('page') || '1', 10) + direction;
+          if (nextPage >= 1) {
+            try {
+              sessionStorage.setItem(GOTO_KEY, JSON.stringify({
+                galleryId,
+                target: direction === +1 ? 'first' : 'last',
+              }));
+            } catch (e) { /* ignore */ }
+            u.searchParams.set('page', String(nextPage));
+            window.location.href = u.toString();
+          }
+        }
+      }
     } catch (e) { /* ignore */ }
   }
 
@@ -343,14 +348,10 @@
     _postKeyListener = (e) => {
       if (isTyping()) return;
       if (e.defaultPrevented || e.ctrlKey || e.altKey || e.metaKey) return;
-      if (e.key === 'e' || e.key === 'E') {
-        const href = getAdjacentPostHref(+1);
-        if (href) { window.location.href = href; }
-        else if (atStoredBoundary(+1)) { navigateToAdjacentPage(+1); }
-      } else if (e.key === 'q' || e.key === 'Q') {
-        const href = getAdjacentPostHref(-1);
-        if (href) { window.location.href = href; }
-        else if (atStoredBoundary(-1)) { navigateToAdjacentPage(-1); }
+      if (e.key === 'e' || e.key === 'E' || e.key === 'ㄷ') {
+        navigateViaList(+1);
+      } else if (e.key === 'q' || e.key === 'Q' || e.key === 'ㅂ') {
+        navigateViaList(-1);
       }
     };
     document.addEventListener('keydown', _postKeyListener);
