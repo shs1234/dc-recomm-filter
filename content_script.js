@@ -123,6 +123,9 @@
         post.removeAttribute('data-dc-filter-hidden');
       }
     }
+
+    // 목록 페이지에서 필터 결과를 sessionStorage에 저장 (Q/E 이동용)
+    if (!isViewPage()) saveFilteredPosts();
   }
 
   function debouncedRun() {
@@ -190,12 +193,184 @@
     _keyListener = null;
   }
 
+  // ---- Post navigation (Q/E) on view pages ----
+  const FILTERED_POSTS_KEY = 'dc-filter-posts:';
+  const GOTO_KEY = 'dc-filter-goto';
+  let _postKeyListener = null;
+
+  function isViewPage() {
+    return /\/(board\/view|board\/read|gallery\/read)/i.test(window.location.pathname);
+  }
+
+  function getGalleryId() {
+    try {
+      return new URL(window.location.href).searchParams.get('id') || '';
+    } catch (e) { return ''; }
+  }
+
+  function getCurrentPostNo() {
+    try {
+      const no = new URL(window.location.href).searchParams.get('no');
+      return no ? parseInt(no, 10) : null;
+    } catch (e) { return null; }
+  }
+
+  function saveFilteredPosts() {
+    const galleryId = getGalleryId();
+    if (!galleryId) return;
+
+    const anchors = Array.from(document.querySelectorAll(
+      'a[href*="/board/view"], a[href*="/board/read"], a[href*="/gallery/read"]'
+    ));
+    const processed = new Set();
+    const posts = [];
+
+    for (const a of anchors) {
+      const post = getPostElementFromAnchor(a);
+      if (!post || processed.has(post)) continue;
+      processed.add(post);
+      if (post.dataset.dcFilterHidden === 'true') continue;
+      try {
+        const u = new URL(a.href, window.location.href);
+        const no = parseInt(u.searchParams.get('no'), 10);
+        if (Number.isInteger(no)) posts.push({ no, href: a.href });
+      } catch (e) { /* ignore */ }
+    }
+
+    try {
+      sessionStorage.setItem(FILTERED_POSTS_KEY + galleryId, JSON.stringify(posts));
+    } catch (e) { /* ignore */ }
+
+    checkAndExecuteGoto();
+  }
+
+  function getAdjacentPostHref(direction) {
+    // direction: -1 = Q (위로/newer), +1 = E (아래로/older)
+    const galleryId = getGalleryId();
+    const currentNo = getCurrentPostNo();
+    if (!galleryId || !currentNo) return null;
+
+    try {
+      const stored = sessionStorage.getItem(FILTERED_POSTS_KEY + galleryId);
+      if (stored) {
+        const posts = JSON.parse(stored);
+        const idx = posts.findIndex(p => p.no === currentNo);
+        if (idx !== -1) {
+          const target = posts[idx + direction];
+          return target ? target.href : null;
+        }
+      }
+    } catch (e) { /* ignore */ }
+
+    // 저장된 목록이 없을 때 폴백: 글 번호 ±1
+    try {
+      const u = new URL(window.location.href);
+      // DCInside는 기본 최신순 정렬 → 위(Q)=no+1, 아래(E)=no-1
+      const nextNo = currentNo - direction;
+      if (nextNo < 1) return null;
+      u.searchParams.set('no', String(nextNo));
+      return u.toString();
+    } catch (e) { return null; }
+  }
+
+  // 저장된 필터 목록 기준으로 현재 글이 경계에 있는지 확인
+  function atStoredBoundary(direction) {
+    const galleryId = getGalleryId();
+    const currentNo = getCurrentPostNo();
+    if (!galleryId || !currentNo) return false;
+    try {
+      const stored = sessionStorage.getItem(FILTERED_POSTS_KEY + galleryId);
+      if (!stored) return false;
+      const posts = JSON.parse(stored);
+      const idx = posts.findIndex(p => p.no === currentNo);
+      if (idx === -1) return false;
+      const nextIdx = idx + direction;
+      return nextIdx < 0 || nextIdx >= posts.length;
+    } catch (e) { return false; }
+  }
+
+  // 목록 페이지 URL 생성 (view URL 기준으로 page 조정)
+  function getListPageUrl(pageOffset) {
+    try {
+      const u = new URL(window.location.href);
+      const targetPage = parseInt(u.searchParams.get('page') || '1', 10) + pageOffset;
+      if (targetPage < 1) return null;
+
+      // /board/view/ → /board/lists/  (mgallery 등 prefix 유지)
+      const listPath = u.pathname.replace(/\/(view|read)\/?$/, '/lists/');
+      if (listPath === u.pathname) return null;
+
+      const listUrl = new URL(u.origin + listPath);
+      listUrl.searchParams.set('id', u.searchParams.get('id') || '');
+      listUrl.searchParams.set('page', String(targetPage));
+      return listUrl.toString();
+    } catch (e) { return null; }
+  }
+
+  // 인접 페이지로 이동하며 자동 열 글 위치 플래그 저장
+  function navigateToAdjacentPage(direction) {
+    // E(+1): 다음 페이지 첫 글 / Q(-1): 이전 페이지 마지막 글
+    const listUrl = getListPageUrl(direction);
+    if (!listUrl) return;
+    const target = direction === +1 ? 'first' : 'last';
+    try {
+      sessionStorage.setItem(GOTO_KEY, JSON.stringify({ galleryId: getGalleryId(), target }));
+    } catch (e) { /* ignore */ }
+    window.location.href = listUrl;
+  }
+
+  // 목록 페이지 도착 후 플래그를 확인해 자동으로 해당 글로 이동
+  function checkAndExecuteGoto() {
+    try {
+      const raw = sessionStorage.getItem(GOTO_KEY);
+      if (!raw) return;
+      const { galleryId, target } = JSON.parse(raw);
+      sessionStorage.removeItem(GOTO_KEY); // 무한 루프 방지
+      if (galleryId !== getGalleryId()) return;
+
+      const stored = sessionStorage.getItem(FILTERED_POSTS_KEY + galleryId);
+      if (!stored) return;
+      const posts = JSON.parse(stored);
+      if (!posts.length) return;
+
+      const post = target === 'first' ? posts[0] : posts[posts.length - 1];
+      if (post) window.location.href = post.href;
+    } catch (e) { /* ignore */ }
+  }
+
+  function addPostNav() {
+    if (_postKeyListener || !isViewPage()) return;
+    _postKeyListener = (e) => {
+      if (isTyping()) return;
+      if (e.defaultPrevented || e.ctrlKey || e.altKey || e.metaKey) return;
+      if (e.key === 'e' || e.key === 'E') {
+        const href = getAdjacentPostHref(+1);
+        if (href) { window.location.href = href; }
+        else if (atStoredBoundary(+1)) { navigateToAdjacentPage(+1); }
+      } else if (e.key === 'q' || e.key === 'Q') {
+        const href = getAdjacentPostHref(-1);
+        if (href) { window.location.href = href; }
+        else if (atStoredBoundary(-1)) { navigateToAdjacentPage(-1); }
+      }
+    };
+    document.addEventListener('keydown', _postKeyListener);
+  }
+
+  function removePostNav() {
+    if (!_postKeyListener) return;
+    document.removeEventListener('keydown', _postKeyListener);
+    _postKeyListener = null;
+  }
+
   // Apply initial settings and run
   chrome.storage.sync.get(DEFAULTS, (items) => {
     settings = { ...DEFAULTS, ...items };
     runFilter();
     initObserver();
-    if (settings.hotkeysEnabled) addKeyNav();
+    if (settings.hotkeysEnabled) {
+      addKeyNav();
+      addPostNav();
+    }
   });
 
   // Listen for storage changes
@@ -206,7 +381,8 @@
     if (changes.hotkeysEnabled) {
       settings.hotkeysEnabled = changes.hotkeysEnabled.newValue;
       changed = true;
-      if (settings.hotkeysEnabled) addKeyNav(); else removeKeyNav();
+      if (settings.hotkeysEnabled) { addKeyNav(); addPostNav(); }
+      else { removeKeyNav(); removePostNav(); }
     }
     if (changed) runFilter();
   });
