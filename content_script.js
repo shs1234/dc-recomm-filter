@@ -192,9 +192,9 @@
       } else if (e.key === ',') {
         const prev = currentPageNumber() - 1;
         if (prev >= 1) gotoPage(prev);
-      } else if (e.key === 'r' || e.key === 'R') {
+      } else if (e.key === 'r' || e.key === 'R' || e.key === 'ㄱ') {
         window.location.reload();
-      } else if (e.key === 'w' || e.key === 'W') {
+      } else if (e.key === 'w' || e.key === 'W' || e.key === 'ㅈ') {
         const url = getWritePageUrl();
         if (url) window.location.href = url;
       }
