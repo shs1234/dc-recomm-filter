@@ -29,8 +29,10 @@ scripts/package.sh     - dist/ zip 패키징 스크립트
 |---|---|---|
 | `,` | 이전 갤러리 페이지 | 전체 |
 | `.` | 다음 갤러리 페이지 | 전체 |
-| `Q` | 이전 글 (필터 통과 글 기준) | 글 보기 |
-| `E` | 다음 글 (필터 통과 글 기준) | 글 보기 |
+| `r` / `R` | 새로고침 | 전체 |
+| `w` / `W` | 글쓰기 페이지 이동 | 전체 |
+| `Q` / `ㅂ` | 이전 글 (필터 통과 글 기준) | 글 보기 |
+| `E` / `ㄷ` | 다음 글 (필터 통과 글 기준) | 글 보기 |
 
 - 모든 단축키는 입력 중(`input`, `textarea`, `contentEditable`)일 때 비활성
 - `hotkeysEnabled` 설정으로 일괄 켜고 끔
@@ -45,15 +47,21 @@ scripts/package.sh     - dist/ zip 패키징 스크립트
 
 ### Q/E 글 이동
 - `saveFilteredPosts()` — `runFilter()` 실행 후 목록 페이지에서 호출. 필터 통과 글 목록을 `sessionStorage`에 저장 (키: `dc-filter-posts:{galleryId}`)
-- `getAdjacentPostHref(direction)` — 저장된 목록 기준 이전(-1)/다음(+1) 글 URL 반환. 목록에 없으면 글 번호 ±1로 폴백
-- `atStoredBoundary(direction)` — 현재 글이 저장된 목록의 경계(처음/끝)인지 확인
-- `navigateToAdjacentPage(direction)` — 경계에서 호출. `sessionStorage`에 `dc-filter-goto` 플래그 저장 후 인접 갤러리 목록 페이지로 이동
-- `checkAndExecuteGoto()` — 목록 페이지 도착 후 `saveFilteredPosts()` 내에서 호출. 플래그 소비 후 해당 글(`first`/`last`)로 자동 이동
+  - 현재 갤러리 ID와 다른 갤러리 링크 제외 (추천글 섹션 등 오탐 방지)
+  - `no` 기준 중복 제거
+- `fetchFilteredPosts(listUrl, galleryId)` — fetch로 목록 페이지 HTML을 백그라운드에서 가져와 파싱·필터링 후 글 목록 반환
+- `navigateViaList(direction)` — Q/E 키 핸들러에서 호출. fetch로 현재 목록을 갱신한 뒤 화면 전환 없이 바로 글로 이동. fetch 실패 시 목록 페이지 경유 방식으로 폴백
+- `checkAndExecuteGoto()` — 폴백 시 목록 페이지 도착 후 `saveFilteredPosts()` 내에서 호출. 플래그 소비 후 해당 글로 자동 이동
 
-#### 페이지 넘김 흐름 (예: E를 마지막 글에서 누를 때)
-1. `atStoredBoundary(+1)` → true
-2. `navigateToAdjacentPage(+1)` → `{ galleryId, target:'first' }` 플래그 저장 → 다음 목록 페이지 이동
-3. 목록 페이지에서 `runFilter()` → `saveFilteredPosts()` → `checkAndExecuteGoto()` → 첫 글로 이동
+#### 글 이동 흐름 (정상, fetch 성공)
+1. Q/E 누름 → `navigateViaList(direction)` 호출
+2. `fetchFilteredPosts(현재 목록 페이지)` → 최신 필터 결과 반환
+3. 같은 페이지 내 인접 글 있으면 바로 이동
+4. 경계(마지막/첫 글)이면 `fetchFilteredPosts(인접 목록 페이지)` → first/last 글로 이동
+
+#### 글 이동 흐름 (폴백, fetch 실패)
+1. Q/E 누름 → `dc-filter-goto` 플래그 저장 → 목록 페이지로 이동
+2. 목록 페이지에서 `runFilter()` → `saveFilteredPosts()` → `checkAndExecuteGoto()` → 해당 글로 이동
 
 ### DevTools 헬퍼
 - `window.__dcFilterRun(threshold, enabled)` — 콘솔에서 수동 테스트용
@@ -70,3 +78,4 @@ npm run package   # dist/dc-recomm-filter.zip 생성
 - DCInside HTML 구조 변경 시 `content_script.js`의 CSS 선택자 후보 목록 업데이트 필요
 - 팝업 저장 시 열려 있는 모든 DCInside 탭에 `update_settings` 메시지 전송
 - `getListPageUrl()` 에서 view URL → list URL 변환 시 `/view/` → `/lists/` 치환 (mgallery 등 prefix 유지)
+- DCInside 목록 페이지는 SSR이므로 fetch로 HTML 파싱 가능
