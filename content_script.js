@@ -92,6 +92,27 @@
     return a.closest('tr') || a.closest('li') || a.closest('.gall_list') || a.closest('.ub-content') || a.parentElement;
   }
 
+  // 갤러리 목록에서 실제 게시물 행(tr.ub-content)의 앵커만 반환
+  // - 개념글/이슈박스 링크 제외 (tr.ub-content 안에 없는 링크)
+  // - 댓글 수 링크 제외 (?t=cv)
+  function getActualPostAnchors(container) {
+    // tr.ub-content 행이 있으면 그것만 사용 (일반 게시판)
+    const ubRows = Array.from(container.querySelectorAll('tr.ub-content'));
+    if (ubRows.length > 0) {
+      const result = [];
+      for (const tr of ubRows) {
+        // 각 행의 첫 번째 제목 링크만 (t=cv 댓글 링크 제외)
+        const a = tr.querySelector('a[href*="/board/view"]:not([href*="t=cv"]), a[href*="/board/read"]:not([href*="t=cv"]), a[href*="/gallery/read"]:not([href*="t=cv"])');
+        if (a) result.push(a);
+      }
+      return result;
+    }
+    // tr.ub-content가 없으면 기존 방식으로 폴백 (단, t=cv 제외)
+    return Array.from(container.querySelectorAll(
+      'a[href*="/board/view"]:not([href*="t=cv"]), a[href*="/board/read"]:not([href*="t=cv"]), a[href*="/gallery/read"]:not([href*="t=cv"])'
+    ));
+  }
+
   function runFilter() {
     if (!settings.enabled) {
       // restore any hidden posts
@@ -102,7 +123,7 @@
       return;
     }
 
-    const anchors = Array.from(document.querySelectorAll('a[href*="/board/view"], a[href*="/board/read"], a[href*="/gallery/read"]'));
+    const anchors = getActualPostAnchors(document);
     const processed = new Set();
 
     for (const a of anchors) {
@@ -234,9 +255,7 @@
     const galleryId = getGalleryId();
     if (!galleryId) return;
 
-    const anchors = Array.from(document.querySelectorAll(
-      'a[href*="/board/view"], a[href*="/board/read"], a[href*="/gallery/read"]'
-    ));
+    const anchors = getActualPostAnchors(document);
     const processed = new Set();
     const posts = [];
 
@@ -288,9 +307,7 @@
     const html = await resp.text();
     const doc = new DOMParser().parseFromString(html, 'text/html');
 
-    const anchors = Array.from(doc.querySelectorAll(
-      'a[href*="/board/view"], a[href*="/board/read"], a[href*="/gallery/read"]'
-    ));
+    const anchors = getActualPostAnchors(doc);
     const processed = new Set();
     const seenNos = new Set();
     const posts = [];
